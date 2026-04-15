@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<title>ace-buddy</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0d12;
+    --panel: rgba(18, 22, 30, 0.85);
+    --accent: #6ee7b7;
+    --muted: #8b92a3;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --text: #f2f5fa;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    font-size: 18px;
+    min-height: 100dvh;
+    overscroll-behavior: none;
+  }
+  body {
+    padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom) 20px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 0;
+    font-weight: 600;
+  }
+  .status {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 14px; color: var(--muted);
+  }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted);
+    box-shadow: 0 0 6px currentColor;
+  }
+  .dot.ok { background: var(--accent); color: var(--accent); }
+  .dot.warn { background: var(--warn); color: var(--warn); }
+  .dot.err { background: var(--err); color: var(--err); }
+  .job {
+    font-size: 13px; color: var(--muted);
+  }
+  #answer {
+    background: var(--panel);
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 18px;
+    padding: 20px 22px;
+    min-height: 300px;
+    contain: layout;
+    line-height: 1.45;
+  }
+  #answer .placeholder {
+    color: var(--muted);
+    font-style: italic;
+  }
+  #answer .tldr {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 0 0 14px;
+    line-height: 1.3;
+  }
+  #answer ul {
+    margin: 0 0 14px;
+    padding-left: 20px;
+  }
+  #answer li {
+    font-size: 20px;
+    margin: 8px 0;
+  }
+  #answer .data {
+    font-size: 16px;
+    color: var(--warn);
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+  button.fire {
+    background: var(--accent);
+    color: #051018;
+    border: none;
+    border-radius: 14px;
+    padding: 18px;
+    font-size: 20px;
+    font-weight: 700;
+    width: 100%;
+    cursor: pointer;
+    min-height: 56px;
+    box-shadow: 0 4px 20px rgba(110, 231, 183, 0.25);
+  }
+  button.fire:active { transform: scale(0.98); }
+  button.fire:disabled { opacity: 0.5; }
+  details.cheat {
+    background: var(--panel);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 14px;
+    padding: 14px 18px;
+  }
+  details.cheat summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  details.cheat .qa {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+  details.cheat .qa .q { font-weight: 600; margin-bottom: 4px; }
+  details.cheat .qa .a { color: var(--muted); font-size: 15px; }
+</style>
+</head>
+<body>
+<header>
+  <div><strong>ace-buddy</strong></div>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">connecting…</span></div>
+</header>
+<div class="job" id="job">__JOB_TITLE__</div>
+
+<div id="answer"><div class="placeholder">Press <b>Cmd+Shift+Space</b> on your Mac or tap <b>Ask</b> below to request an answer.</div></div>
+
+<button class="fire" id="fireBtn" disabled>Ask</button>
+
+<details class="cheat">
+  <summary>Anticipated questions</summary>
+  <div id="cheatList"><div class="qa">(loading…)</div></div>
+</details>
+
+<script>
+(function(){
+  const token = "__TOKEN__";
+  if (token && !document.cookie.includes("ab_token")) {
+    document.cookie = "ab_token=" + token + ";path=/;max-age=86400;samesite=lax";
+  }
+
+  const dot = document.getElementById("dot");
+  const statusText = document.getElementById("statusText");
+  const answerEl = document.getElementById("answer");
+  const fireBtn = document.getElementById("fireBtn");
+  const cheatList = document.getElementById("cheatList");
+
+  let ws = null;
+  let firstTokenTs = null;
+  let currentAnswerId = 0;
+  let buffer = "";
+
+  // Expose for tests
+  window.firstTokenTs = null;
+  window.lastAnswerText = "";
+
+  function setStatus(state, text) {
+    dot.className = "dot " + state;
+    statusText.textContent = text;
+  }
+
+  async function requestWakeLock() {
+    if ("wakeLock" in navigator) {
+      try { await navigator.wakeLock.request("screen"); } catch (e) {}
+    }
+  }
+
+  function renderAnswer(text) {
+    // Parse "**TL;DR**: ...\n- a\n- b\n- c\n**Data**: ..."
+    if (!text) {
+      answerEl.innerHTML = '<div class="placeholder">Waiting for your next question…</div>';
+      return;
+    }
+    const lines = text.split("\n");
+    let tldr = "";
+    const bullets = [];
+    let data = "";
+    for (const line of lines) {
+      const l = line.trim();
+      if (!l) continue;
+      if (l.startsWith("**TL;DR**") || l.startsWith("**TLDR**")) {
+        tldr = l.replace(/^\*\*TL;?DR\*\*:?/i, "").trim();
+      } else if (l.startsWith("- ")) {
+        bullets.push(l.slice(2));
+      } else if (l.startsWith("**Data**")) {
+        data = l.replace(/^\*\*Data\*\*:?/i, "").trim();
+      } else if (!tldr) {
+        tldr = l;
+      } else {
+        bullets.push(l);
+      }
+    }
+    let html = "";
+    if (tldr) html += '<div class="tldr">' + escapeHtml(tldr) + "</div>";
+    if (bullets.length) {
+      html += "<ul>";
+      for (const b of bullets) html += "<li>" + escapeHtml(b) + "</li>";
+      html += "</ul>";
+    }
+    if (data) html += '<div class="data">' + escapeHtml(data) + "</div>";
+    answerEl.innerHTML = html || '<div class="placeholder">(empty answer)</div>';
+    window.lastAnswerText = text;
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function connect() {
+    setStatus("warn", "connecting…");
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(proto + "//" + location.host + "/ws");
+    ws.onopen = () => {
+      setStatus("ok", "ready");
+      fireBtn.disabled = false;
+      requestWakeLock();
+    };
+    ws.onclose = () => {
+      setStatus("err", "disconnected");
+      fireBtn.disabled = true;
+      setTimeout(connect, 1000);
+    };
+    ws.onerror = () => { setStatus("err", "error"); };
+    ws.onmessage = (ev) => {
+      let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.type === "hello") {
+        if (msg.job_title) document.getElementById("job").textContent = msg.job_title;
+        loadCheatsheet();
+      } else if (msg.type === "answer_start") {
+        currentAnswerId = msg.id;
+        buffer = "";
+        firstTokenTs = null;
+        setStatus("warn", "thinking…");
+        answerEl.innerHTML = '<div class="placeholder">…</div>';
+      } else if (msg.type === "answer_token") {
+        if (firstTokenTs === null) {
+          firstTokenTs = Date.now();
+          window.firstTokenTs = firstTokenTs;
+          setStatus("ok", "streaming");
+        }
+        buffer += msg.text;
+        renderAnswer(buffer);
+      } else if (msg.type === "answer_complete") {
+        setStatus("ok", "ready");
+      } else if (msg.type === "error") {
+        setStatus("err", msg.text || "error");
+      }
+    };
+  }
+
+  async function loadCheatsheet() {
+    try {
+      const r = await fetch("/cheatsheet");
+      if (!r.ok) return;
+      const data = await r.json();
+      const qs = data.questions || [];
+      if (!qs.length) {
+        cheatList.innerHTML = '<div class="qa">(not computed yet)</div>';
+        return;
+      }
+      cheatList.innerHTML = qs.map(
+        q => '<div class="qa"><div class="q">' + escapeHtml(q.q || "") + '</div><div class="a">' + escapeHtml(q.a || "") + '</div></div>'
+      ).join("");
+    } catch (e) {}
+  }
+
+  fireBtn.addEventListener("click", async () => {
+    fireBtn.disabled = true;
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({type: "fire"}));
+      } else {
+        await fetch("/fire", {method: "POST"});
+      }
+    } finally {
+      setTimeout(() => { fireBtn.disabled = false; }, 1500);
+    }
+  });
+
+  connect();
+})();
+</script>
+</body>
+</html>

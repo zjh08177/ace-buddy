@@ -1,0 +1,49 @@
+[project]
+name = "ace-buddy"
+version = "0.1.0"
+description = "Personal macOS interview copilot — mic + screen OCR → GPT-4o → phone"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "python-dotenv>=1.0",
+  "qrcode[pil]>=7.4",
+  "openai>=1.40",
+  "numpy>=1.26",
+  "sounddevice>=0.5",
+  "pynput>=1.7",
+  "pyobjc-framework-Vision>=10.3; sys_platform == 'darwin'",
+  "pyobjc-framework-Quartz>=10.3; sys_platform == 'darwin'",
+  "rumps>=0.4; sys_platform == 'darwin'",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "playwright>=1.48",
+  "ruff>=0.6",
+]
+
+[project.scripts]
+ace-buddy = "ace_buddy.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ace_buddy = ["ui/*.html"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
