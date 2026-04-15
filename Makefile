@@ -17,20 +17,17 @@ run-headless:
 
 test: verify-l0
 
-verify: verify-l0 verify-l2
+verify: verify-l0 verify-l4
 	@echo "\n✅ All layers green"
 
 verify-l0:
-	$(PY) -m pytest tests/ -x -q --tb=short -m "not live and not e2e"
-
-verify-l1:
-	RUN_LIVE_TESTS=1 $(PY) -m pytest tests/ -x -q -m "live"
-
-verify-l2:
-	$(PY) -m pytest tests/ -x -q -m "e2e"
+	$(PY) -m pytest tests/ -x -q --tb=short --ignore=tests/test_e2e_full_loop.py --ignore=tests/test_live_api.py
 
 verify-l4:
-	RUN_LIVE_TESTS=1 $(PY) -m pytest tests/test_full_loop.py -x -q
+	$(PY) -m pytest tests/test_e2e_full_loop.py -x -q --tb=short
+
+verify-live:
+	RUN_LIVE_TESTS=1 $(PY) -m pytest tests/test_live_api.py -x -q --tb=short
 
 clean:
 	rm -rf build/ dist/ *.egg-info .pytest_cache .ruff_cache
