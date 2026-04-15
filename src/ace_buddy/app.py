@@ -3,16 +3,24 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import secrets
 import signal
 import sys
 from pathlib import Path
+from typing import Optional
 
 import uvicorn
 
+from ace_buddy.audio import AudioSource, FixtureAudioSource, SoundDeviceAudioSensor
+from ace_buddy.cheatsheet import compute as compute_cheatsheet
+from ace_buddy.llm import LLMClient, MockLLMClient, OpenAILLMClient
+from ace_buddy.pipeline import Pipeline
+from ace_buddy.prompt import ContextBundle, PromptBuilder
 from ace_buddy.server import ServerState, auth_url, build_qr_png, create_app, get_local_ip
+from ace_buddy.vision import FixtureScreenSource, ScreencaptureScreenSource, ScreenSource
 
 log = logging.getLogger("ace_buddy")
 
@@ -72,17 +80,10 @@ def build_state(args: argparse.Namespace) -> ServerState:
         auth_required=not args.no_auth,
         debug=os.environ.get("ACE_BUDDY_DEBUG") == "1",
     )
-    # Try to read job title for display banner
-    job_md = config_dir / "job.md"
-    if job_md.exists():
-        first = job_md.read_text(errors="ignore").strip().splitlines()
-        if first:
-            state.job_title = first[0].lstrip("# ").strip() or state.job_title
     return state
 
 
-async def run_server(state: ServerState, bind_host: str) -> None:
-    app = create_app(state)
+async def run_server(app, state: ServerState, bind_host: str) -> None:
     cfg = uvicorn.Config(
         app,
         host=bind_host,
@@ -92,6 +93,77 @@ async def run_server(state: ServerState, bind_host: str) -> None:
     )
     server = uvicorn.Server(cfg)
     await server.serve()
+
+
+def build_audio(args) -> AudioSource:
+    if args.fixture_audio:
+        log.info("using fixture audio: %s", args.fixture_audio)
+        return FixtureAudioSource(args.fixture_audio)
+    if args.headless:
+        # Headless mode in tests: empty audio source unless fixture given
+        return FixtureAudioSource("/nonexistent.wav")
+    return SoundDeviceAudioSensor()
+
+
+def build_screen(args) -> ScreenSource:
+    if args.fixture_screen:
+        log.info("using fixture screen: %s", args.fixture_screen)
+        return FixtureScreenSource(args.fixture_screen)
+    return ScreencaptureScreenSource()
+
+
+def build_llm(args) -> LLMClient:
+    if args.mock_llm:
+        try:
+            tokens = json.loads(args.mock_llm)
+            log.info("using mock LLM with %d tokens", len(tokens))
+            return MockLLMClient(tokens=tokens, delay_s=0.0)
+        except json.JSONDecodeError as e:
+            log.error("invalid --mock-llm JSON: %s", e)
+            sys.exit(2)
+    if os.environ.get("MOCK_ANSWER"):
+        return MockLLMClient(delay_s=0.0)
+    return OpenAILLMClient(model=os.environ.get("ACE_BUDDY_MODEL", "gpt-4o"))
+
+
+def register_hotkey(fire_fn) -> Optional[object]:
+    """Best-effort global hotkey via pynput. Returns listener or None."""
+    try:
+        from pynput import keyboard
+    except Exception as e:
+        log.warning("pynput unavailable: %s", e)
+        return None
+
+    hotkey_str = os.environ.get("ACE_BUDDY_HOTKEY", "<cmd>+<shift>+<space>")
+    try:
+        combo = keyboard.HotKey.parse(hotkey_str)
+    except Exception as e:
+        log.warning("invalid hotkey %r: %s", hotkey_str, e)
+        return None
+
+    hotkey = keyboard.HotKey(combo, fire_fn)
+
+    def on_press(key):
+        try:
+            hotkey.press(listener.canonical(key))
+        except Exception:
+            pass
+
+    def on_release(key):
+        try:
+            hotkey.release(listener.canonical(key))
+        except Exception:
+            pass
+
+    listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+    listener.daemon = True
+    try:
+        listener.start()
+        log.info("hotkey registered: %s", hotkey_str)
+    except Exception as e:
+        log.warning("hotkey listener start failed: %s", e)
+        return None
+    return listener
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -104,6 +176,34 @@ def main(argv: list[str] | None = None) -> int:
 
     state = build_state(args)
     bind_host = "0.0.0.0" if args.lan else "127.0.0.1"
+
+    # Load context + build pipeline components
+    ctx = ContextBundle.from_dir(state.config_dir)
+    state.job_title = ctx.job_title
+    prompt_builder = PromptBuilder(ctx)
+
+    audio = build_audio(args)
+    screen = build_screen(args)
+    llm = build_llm(args)
+    pipeline = Pipeline(
+        state=state,
+        audio=audio,
+        screen=screen,
+        llm=llm,
+        prompt_builder=prompt_builder,
+    )
+
+    # Start audio sensor in background thread
+    try:
+        audio.start()
+    except Exception as e:
+        log.warning("audio.start failed (non-fatal in headless/fixture mode): %s", e)
+
+    # Wire pipeline fire into server state
+    state.fire_callback = pipeline.fire_from_any_thread
+
+    # Build the FastAPI app
+    app = create_app(state)
 
     url = auth_url(state)
     print(f"\nace-buddy ready")
@@ -118,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     # Signal-based shutdown
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    pipeline.attach_loop(loop)
     stop_event = asyncio.Event()
 
     def _stop(*_):
@@ -127,8 +228,23 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
+    # Register global hotkey (non-fatal if it fails — /fire still works)
+    hotkey_listener = register_hotkey(pipeline.fire_from_any_thread) if not args.headless else None
+
     async def _run():
-        server_task = asyncio.create_task(run_server(state, bind_host))
+        # Compute cheatsheet in background (non-blocking)
+        async def _cheat():
+            if args.mock_llm or args.headless:
+                return
+            try:
+                qs = await compute_cheatsheet(ctx)
+                state.cheatsheet = qs
+                log.info("cheatsheet computed: %d questions", len(qs))
+            except Exception as e:
+                log.warning("cheatsheet compute failed: %s", e)
+
+        asyncio.create_task(_cheat())
+        server_task = asyncio.create_task(run_server(app, state, bind_host))
         stop_task = asyncio.create_task(stop_event.wait())
         done, pending = await asyncio.wait(
             {server_task, stop_task},
@@ -142,6 +258,15 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        try:
+            audio.stop()
+        except Exception:
+            pass
+        if hotkey_listener is not None:
+            try:
+                hotkey_listener.stop()
+            except Exception:
+                pass
         loop.close()
     return 0
 

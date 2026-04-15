@@ -46,7 +46,7 @@ def test_index_html_served(app_handle):
     assert "Cmd+Shift+Space" in r.text
 
 
-def test_fire_without_pipeline_returns_503(app_handle):
+def test_fire_returns_ok(app_handle):
     r = httpx.post(f"{app_handle.url}/fire", timeout=2)
-    # S1: no pipeline wired yet → 503
-    assert r.status_code == 503
+    assert r.status_code == 200
+    assert r.json().get("ok") is True
