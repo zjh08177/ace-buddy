@@ -9,6 +9,8 @@ build/
 dist/
 .env
 .planning-dir
+.tmp-cfg/
+-
 test-results/
 .DS_Store
 *.wav.cache
