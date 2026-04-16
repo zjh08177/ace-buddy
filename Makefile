@@ -10,7 +10,7 @@ run:
 	$(PY) -m ace_buddy.app
 
 run-lan:
-	$(PY) -m ace_buddy.app --lan
+	$(PY) -m ace_buddy.app --lan --debug
 
 run-headless:
 	$(PY) -m ace_buddy.app --headless --no-auth

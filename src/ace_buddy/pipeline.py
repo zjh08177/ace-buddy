@@ -100,7 +100,20 @@ class Pipeline:
                 transcript, ocr_text = "", ""
 
             sensor_ms = (time.monotonic() - t0) * 1000
-            log.info("sensors done in %.0fms", sensor_ms)
+            log.info(
+                "sensors done in %.0fms — transcript=%d chars, ocr=%d chars",
+                sensor_ms,
+                len(transcript or ""),
+                len(ocr_text or ""),
+            )
+            if not transcript and not ocr_text:
+                log.warning(
+                    "BOTH sensors returned empty! Check: "
+                    "(1) mic permission granted? "
+                    "(2) Screen Recording permission granted? "
+                    "(3) restart app after granting permissions. "
+                    "Visit /debug/sensors in browser to diagnose."
+                )
 
             system_prompt, user_msg = self.prompt_builder.build(transcript, ocr_text)
 

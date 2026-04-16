@@ -56,6 +56,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--port", type=int, default=int(os.environ.get("ACE_BUDDY_PORT", "8765")))
     p.add_argument("--no-auth", action="store_true", help="skip token auth (tests only)")
     p.add_argument("--headless", action="store_true", help="no menu bar (tests)")
+    p.add_argument("--debug", action="store_true", help="enable /debug/* routes")
     p.add_argument("--fixture-audio", type=str, default=None)
     p.add_argument("--fixture-screen", type=str, default=None)
     p.add_argument("--mock-llm", type=str, default=None, help="JSON list of tokens to emit")
@@ -78,7 +79,7 @@ def build_state(args: argparse.Namespace) -> ServerState:
         port=args.port,
         config_dir=config_dir,
         auth_required=not args.no_auth,
-        debug=os.environ.get("ACE_BUDDY_DEBUG") == "1",
+        debug=args.debug or os.environ.get("ACE_BUDDY_DEBUG") == "1",
     )
     return state
 
@@ -199,8 +200,10 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:
         log.warning("audio.start failed (non-fatal in headless/fixture mode): %s", e)
 
-    # Wire pipeline fire into server state
+    # Wire pipeline fire + sensor refs into server state
     state.fire_callback = pipeline.fire_from_any_thread
+    state.audio_source = audio
+    state.screen_source = screen
 
     # Build the FastAPI app
     app = create_app(state)

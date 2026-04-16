@@ -59,6 +59,10 @@ class ServerState:
     # Injected later for cheatsheet
     cheatsheet: list[dict] = field(default_factory=list)
 
+    # Injected by app.py for debug sensor checks
+    audio_source: Optional[object] = None
+    screen_source: Optional[object] = None
+
 
 def get_local_ip() -> str:
     """Best-effort local LAN IP."""
@@ -168,6 +172,52 @@ def create_app(state: ServerState) -> FastAPI:
                 "complete": state.current_answer.complete,
                 "has_client": state.current_ws is not None,
             }
+
+        @app.get("/debug/sensors")
+        async def debug_sensors():
+            """Test both sensors independently. Returns diagnostic report."""
+            result = {"mic": {}, "screen": {}}
+
+            # --- mic ---
+            if state.audio_source is not None:
+                try:
+                    rms = getattr(state.audio_source, "recent_rms", None)
+                    result["mic"]["rms"] = rms
+                    wav = state.audio_source.get_last_n_seconds(2)
+                    result["mic"]["wav_bytes"] = len(wav) if wav else 0
+                    result["mic"]["has_audio_data"] = bool(wav and len(wav) > 100)
+                    if rms is not None and rms > 0.001:
+                        result["mic"]["status"] = "ok — hearing audio"
+                    elif wav and len(wav) > 100:
+                        result["mic"]["status"] = "silent — mic open but no sound detected"
+                    else:
+                        result["mic"]["status"] = "empty — mic may not be recording"
+                except Exception as e:
+                    result["mic"]["status"] = f"error: {e}"
+            else:
+                result["mic"]["status"] = "not wired"
+
+            # --- screen ---
+            if state.screen_source is not None:
+                try:
+                    text = await state.screen_source.capture_and_ocr()
+                    result["screen"]["ocr_chars"] = len(text)
+                    result["screen"]["ocr_preview"] = text[:200] if text else "(empty)"
+                    result["screen"]["paused"] = getattr(state.screen_source, "paused", False)
+                    if text:
+                        result["screen"]["status"] = f"ok — captured {len(text)} chars"
+                    else:
+                        result["screen"]["status"] = (
+                            "empty — Screen Recording permission may be missing. "
+                            "Grant in System Settings → Privacy & Security → Screen Recording, "
+                            "then QUIT and relaunch ace-buddy."
+                        )
+                except Exception as e:
+                    result["screen"]["status"] = f"error: {e}"
+            else:
+                result["screen"]["status"] = "not wired"
+
+            return result
 
     # --- WebSocket ---
 
