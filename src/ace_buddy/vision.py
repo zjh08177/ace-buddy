@@ -92,7 +92,11 @@ async def ocr_png_bytes(png_bytes: bytes) -> str:
 
 
 class ScreencaptureScreenSource:
-    """Shells out to `/usr/sbin/screencapture` per capture. Apple-signed binary."""
+    """Shells out to `/usr/sbin/screencapture` per capture. Apple-signed binary.
+
+    Uses a temp file (not stdout pipe) because macOS screencapture returns
+    0 bytes on stdout when invoked from a Python asyncio subprocess.
+    """
 
     def __init__(self, screencapture_path: str = SCREENCAPTURE_BIN):
         self.path = screencapture_path
@@ -104,34 +108,52 @@ class ScreencaptureScreenSource:
         if not Path(self.path).exists():
             log.error("%s does not exist", self.path)
             return ""
+
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 self.path,
                 "-x",  # silent (no sound)
                 "-t", "png",
-                "-",  # stdout
-                stdout=asyncio.subprocess.PIPE,
+                tmp_path,
+                stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
+            _, stderr = await asyncio.wait_for(
                 proc.communicate(),
                 timeout=CAPTURE_TIMEOUT_SEC,
             )
         except asyncio.TimeoutError:
             log.warning("screencapture timed out")
+            Path(tmp_path).unlink(missing_ok=True)
             return ""
         except FileNotFoundError:
             log.error("screencapture not found")
+            Path(tmp_path).unlink(missing_ok=True)
             return ""
 
         if proc.returncode != 0:
             log.warning("screencapture exit code %s: %s", proc.returncode, stderr[:200])
+            Path(tmp_path).unlink(missing_ok=True)
             return ""
 
-        if not stdout:
+        try:
+            png_bytes = Path(tmp_path).read_bytes()
+        except OSError as e:
+            log.warning("failed to read capture file: %s", e)
+            return ""
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+        if not png_bytes or len(png_bytes) < 100:
+            log.warning("screencapture produced empty/tiny file (%d bytes)", len(png_bytes))
             return ""
 
-        return await ocr_png_bytes(stdout)
+        return await ocr_png_bytes(png_bytes)
 
     async def aclose(self) -> None:
         pass
