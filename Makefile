@@ -1,6 +1,6 @@
 .PHONY: run test verify verify-l0 verify-l1 verify-l2 verify-l4 clean install
 
-PY ?= python3
+PY ?= .venv/bin/python3
 PIP ?= $(PY) -m pip
 
 install:
