@@ -43,7 +43,7 @@ class OpenAILLMClient:
                 ],
                 stream=True,
                 temperature=0.2,
-                max_tokens=220,
+                max_tokens=16384,
             )
             async for chunk in stream:
                 if not chunk.choices:
