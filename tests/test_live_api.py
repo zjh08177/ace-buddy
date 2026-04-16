@@ -16,6 +16,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from dotenv import load_dotenv
+
+# Auto-load key from ~/.ace-buddy/.env so user doesn't need to export manually
+load_dotenv(Path.home() / ".ace-buddy" / ".env")
 
 LIVE = os.environ.get("RUN_LIVE_TESTS") == "1" and bool(
     os.environ.get("OPENAI_API_KEY", "").startswith("sk-")
