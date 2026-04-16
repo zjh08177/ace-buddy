@@ -168,36 +168,22 @@
     }
   }
 
-  function renderAnswer(text) {
-    if (!text) {
-      answerEl.innerHTML = '<div class="placeholder">Waiting…</div>';
-      return;
-    }
-    // Simple markdown → HTML: headers, bold, code blocks, lists
+  function renderAnswerInto(el, text) {
+    if (!text) { el.innerHTML = "…"; return; }
     let html = escapeHtml(text);
-    // Code blocks: ```lang\n...\n```
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
       '<pre><code>' + code.trim() + '</code></pre>');
-    // Inline code
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    // Headers: ## ... and **...**:
     html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
     html = html.replace(/^### (.+)$/gm, '<h3 style="color:var(--accent);font-size:14px;margin:10px 0 4px">$1</h3>');
-    // Bold
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    // Bullet lists
     html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
     html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-    // Numbered lists
     html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-    // Line breaks
     html = html.replace(/\n\n/g, '<br><br>');
     html = html.replace(/\n/g, '<br>');
-    // Clean up double <br> inside pre
-    answerEl.innerHTML = html;
+    el.innerHTML = html;
     window.lastAnswerText = text;
-    // Auto-scroll to bottom
-    answerEl.scrollTop = answerEl.scrollHeight;
   }
 
   function escapeHtml(s) {
@@ -231,7 +217,20 @@
         buffer = "";
         firstTokenTs = null;
         setStatus("warn", "thinking…");
-        answerEl.innerHTML = '<div class="placeholder">…</div>';
+        // Append a new answer block instead of clearing
+        const sep = document.createElement("div");
+        sep.style.cssText = "border-top:1px solid rgba(255,255,255,0.1);margin:16px 0;padding-top:8px;font-size:11px;color:var(--muted)";
+        const now = new Date();
+        sep.textContent = "#" + msg.id + " — " + now.toLocaleTimeString();
+        // Remove placeholder if present
+        const ph = answerEl.querySelector(".placeholder");
+        if (ph) ph.remove();
+        answerEl.appendChild(sep);
+        // Create container for this answer's streaming content
+        const block = document.createElement("div");
+        block.id = "answer-" + msg.id;
+        answerEl.appendChild(block);
+        answerEl.scrollTop = answerEl.scrollHeight;
       } else if (msg.type === "answer_token") {
         if (firstTokenTs === null) {
           firstTokenTs = Date.now();
@@ -239,7 +238,9 @@
           setStatus("ok", "streaming");
         }
         buffer += msg.text;
-        renderAnswer(buffer);
+        const block = document.getElementById("answer-" + currentAnswerId);
+        if (block) renderAnswerInto(block, buffer);
+        answerEl.scrollTop = answerEl.scrollHeight;
       } else if (msg.type === "answer_complete") {
         setStatus("ok", "ready");
         document.getElementById("triggerStatus").textContent = "";

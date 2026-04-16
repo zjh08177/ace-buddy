@@ -22,9 +22,10 @@ SILENCE_TRIGGER_SEC = 1.5      # silence after speech → fire
 AUDIO_POLL_INTERVAL = 0.1      # 100ms polling
 
 # Screen thresholds
-OCR_POLL_INTERVAL_SEC = 3.0
-OCR_MIN_CHARS = 30
-OCR_DEBOUNCE_SEC = 5.0
+OCR_POLL_INTERVAL_SEC = 5.0     # poll less frequently (was 3s)
+OCR_MIN_CHARS = 50              # require more text to count as real content
+OCR_DEBOUNCE_SEC = 15.0         # much longer debounce (was 5s)
+OCR_CHANGE_THRESHOLD = 0.30     # require 30% character difference to count as "changed"
 
 
 @runtime_checkable
@@ -119,9 +120,30 @@ class AutoTrigger:
 
             await asyncio.sleep(AUDIO_POLL_INTERVAL)
 
+    @staticmethod
+    def _text_diff_ratio(a: str, b: str) -> float:
+        """Rough character-level difference ratio. 0.0 = identical, 1.0 = completely different."""
+        if not a and not b:
+            return 0.0
+        if not a or not b:
+            return 1.0
+        # Normalize whitespace for comparison
+        a_norm = " ".join(a.split())
+        b_norm = " ".join(b.split())
+        if a_norm == b_norm:
+            return 0.0
+        # Simple: ratio of differing chars using set-based comparison on character bigrams
+        a_set = set(a_norm[i:i+3] for i in range(len(a_norm) - 2))
+        b_set = set(b_norm[i:i+3] for i in range(len(b_norm) - 2))
+        if not a_set and not b_set:
+            return 0.0
+        union = a_set | b_set
+        intersection = a_set & b_set
+        return 1.0 - (len(intersection) / len(union)) if union else 0.0
+
     async def _watch_screen(self) -> None:
-        """Hash OCR text every 3s; fire on significant change."""
-        last_hash = ""
+        """Poll OCR every 5s; fire only on significant content change (>30% diff)."""
+        last_text = ""
         last_fire_ts = 0.0
 
         while self._running:
@@ -136,18 +158,19 @@ class AutoTrigger:
             if not text or len(text) < OCR_MIN_CHARS:
                 continue
 
-            current_hash = hashlib.md5(text.encode()).hexdigest()
-            if current_hash == last_hash:
-                continue
+            # Fuzzy diff instead of exact hash — OCR noise causes minor variations
+            diff = self._text_diff_ratio(last_text, text)
+            if diff < OCR_CHANGE_THRESHOLD:
+                continue  # Minor OCR noise, not a real screen change
 
-            # Hash changed — but is it significant?
+            # Significant change — but respect debounce
             now = time.monotonic()
             if now - last_fire_ts < OCR_DEBOUNCE_SEC:
-                last_hash = current_hash  # Update hash but don't fire
+                last_text = text
                 continue
 
-            log.info("auto-trigger: screen content changed (%d chars)", len(text))
+            log.info("auto-trigger: screen content changed (%.0f%% diff, %d chars)", diff * 100, len(text))
             self.on_trigger("screen_changed")
             self.fire_fn()
-            last_hash = current_hash
+            last_text = text
             last_fire_ts = now
