@@ -112,13 +112,29 @@ def create_app(state: ServerState) -> FastAPI:
         try:
             check_auth(state, ab_token)
         except HTTPException:
-            return JSONResponse(
-                {"error": "visit /auth?k=TOKEN first", "hint": "scan the QR from the menu bar"},
-                status_code=401,
+            # Unauthenticated: show QR + URL inline
+            import base64
+            url = auth_url(state)
+            qr_bytes = build_qr_png(url)
+            qr_b64 = base64.b64encode(qr_bytes).decode()
+            return HTMLResponse(
+                f"""<!doctype html><html><head>
+                <meta name="viewport" content="width=device-width,initial-scale=1">
+                <style>body{{background:#0b0d12;color:#f2f5fa;font-family:sans-serif;
+                text-align:center;padding:40px 20px}}
+                img{{max-width:280px;border-radius:12px;margin:20px auto}}
+                a{{color:#6ee7b7;word-break:break-all}}</style>
+                </head><body>
+                <h2>ace-buddy</h2>
+                <p>Scan this QR code on your phone:</p>
+                <img src="data:image/png;base64,{qr_b64}">
+                <p>Or open this URL:</p>
+                <p><a href="{url}">{url}</a></p>
+                </body></html>"""
             )
         html = UI_PATH.read_text()
         html = html.replace("__JOB_TITLE__", state.job_title)
-        html = html.replace("__TOKEN__", "")  # F4: never inject token in HTML; cookie set by /auth
+        html = html.replace("__TOKEN__", "")
         return HTMLResponse(html)
 
     @app.get("/qr")

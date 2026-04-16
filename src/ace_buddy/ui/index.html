@@ -128,9 +128,11 @@
 </header>
 <div class="job" id="job">__JOB_TITLE__</div>
 
-<div id="answer"><div class="placeholder">Press <b>Cmd+Shift+Space</b> on your Mac or tap <b>Ask</b> below to request an answer.</div></div>
+<div id="triggerStatus" style="font-size:13px;color:var(--muted);text-align:center;min-height:18px"></div>
 
-<button class="fire" id="fireBtn" disabled>Ask</button>
+<div id="answer"><div class="placeholder">Auto-listening for questions. Tap <b>Ask</b> to trigger manually.</div></div>
+
+<button class="fire" id="fireBtn" disabled>Ask (manual)</button>
 
 <details class="cheat">
   <summary>Anticipated questions</summary>
@@ -249,8 +251,12 @@
         renderAnswer(buffer);
       } else if (msg.type === "answer_complete") {
         setStatus("ok", "ready");
+        document.getElementById("triggerStatus").textContent = "";
       } else if (msg.type === "error") {
         setStatus("err", msg.text || "error");
+      } else if (msg.type === "trigger_reason") {
+        const reasons = {"speech_ended": "🎤 speech ended — generating...", "screen_changed": "👀 screen changed — generating..."};
+        document.getElementById("triggerStatus").textContent = reasons[msg.reason] || msg.reason;
       }
     };
   }

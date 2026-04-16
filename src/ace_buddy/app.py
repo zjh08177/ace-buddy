@@ -19,7 +19,8 @@ from ace_buddy.cheatsheet import compute as compute_cheatsheet
 from ace_buddy.llm import LLMClient, MockLLMClient, OpenAILLMClient
 from ace_buddy.pipeline import Pipeline
 from ace_buddy.prompt import ContextBundle, PromptBuilder
-from ace_buddy.server import ServerState, auth_url, build_qr_png, create_app, get_local_ip
+from ace_buddy.server import ServerState, auth_url, broadcast, build_qr_png, create_app, get_local_ip
+from ace_buddy.trigger import AutoTrigger
 from ace_buddy.vision import FixtureScreenSource, ScreencaptureScreenSource, ScreenSource
 
 log = logging.getLogger("ace_buddy")
@@ -60,6 +61,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     mode_group = p.add_mutually_exclusive_group()
     mode_group.add_argument("--interviewer", action="store_true", help="interviewer mode: mic/screen capture the candidate")
     mode_group.add_argument("--candidate", action="store_true", help="candidate mode: mic/screen capture the interviewer (default)")
+    p.add_argument("--no-auto-trigger", action="store_true", help="disable auto-trigger (manual Ask only)")
     p.add_argument("--fixture-audio", type=str, default=None)
     p.add_argument("--fixture-screen", type=str, default=None)
     p.add_argument("--mock-llm", type=str, default=None, help="JSON list of tokens to emit")
@@ -239,6 +241,22 @@ def main(argv: list[str] | None = None) -> int:
     # Register global hotkey (non-fatal if it fails — /fire still works)
     hotkey_listener = register_hotkey(pipeline.fire_from_any_thread) if not args.headless else None
 
+    # Auto-trigger: broadcasts trigger reason to phone UI
+    auto_trigger: Optional[AutoTrigger] = None
+    if not args.no_auto_trigger and not args.headless:
+        def _on_trigger(reason: str):
+            async def _notify():
+                await broadcast(state, {"type": "trigger_reason", "reason": reason})
+            if pipeline._loop:
+                asyncio.run_coroutine_threadsafe(_notify(), pipeline._loop)
+
+        auto_trigger = AutoTrigger(
+            audio=audio,
+            screen=screen,
+            fire_fn=pipeline.fire_from_any_thread,
+            on_trigger=_on_trigger,
+        )
+
     async def _run():
         # Compute cheatsheet in background (non-blocking)
         async def _cheat():
@@ -252,12 +270,22 @@ def main(argv: list[str] | None = None) -> int:
                 log.warning("cheatsheet compute failed: %s", e)
 
         asyncio.create_task(_cheat())
+
+        # Start auto-trigger if enabled
+        if auto_trigger is not None:
+            await auto_trigger.start()
+            log.info("auto-trigger enabled (speech silence + screen OCR change)")
+        else:
+            log.info("auto-trigger disabled (manual Ask/hotkey only)")
+
         server_task = asyncio.create_task(run_server(app, state, bind_host))
         stop_task = asyncio.create_task(stop_event.wait())
         done, pending = await asyncio.wait(
             {server_task, stop_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
+        if auto_trigger is not None:
+            await auto_trigger.stop()
         for t in pending:
             t.cancel()
 

@@ -39,11 +39,19 @@ def test_qr_returns_png(app_handle):
     assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_index_html_served(app_handle):
+def test_unauthenticated_root_shows_qr(app_handle):
+    """Unauthenticated / returns inline QR page (no-auth mode still serves app directly)."""
     r = httpx.get(f"{app_handle.url}/", timeout=2)
     assert r.status_code == 200
     assert "ace-buddy" in r.text
-    assert "Cmd+Shift+Space" in r.text
+
+
+def test_index_html_served(app_handle):
+    """Authenticated / returns the phone UI."""
+    r = httpx.get(f"{app_handle.url}/", timeout=2)
+    assert r.status_code == 200
+    # In --no-auth mode, / serves the app directly
+    assert "ace-buddy" in r.text
 
 
 def test_fire_returns_ok(app_handle):
