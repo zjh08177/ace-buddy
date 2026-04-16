@@ -33,8 +33,7 @@ class OpenAILLMClient:
                 f"cost bound exceeded: ${self.total_cost_usd:.3f} > ${self.cost_bound_usd:.3f}"
             )
         if self._client is None:
-            yield "[llm unavailable]"
-            return
+            raise RuntimeError("LLM client unavailable — check OPENAI_API_KEY")
         try:
             stream = await self._client.chat.completions.create(
                 model=self.model,
@@ -58,7 +57,7 @@ class OpenAILLMClient:
             self.total_cost_usd += 0.0025 + 0.0015  # ~$0.004 per call, conservative
         except Exception as e:
             log.warning("openai stream failed: %s", e)
-            yield f"[error: {e}]"
+            raise  # F2: propagate to pipeline, which sends typed error to phone
 
 
 class MockLLMClient:

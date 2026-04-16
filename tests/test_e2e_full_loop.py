@@ -46,7 +46,7 @@ def e2e_handle(tmp_path):
     handle = AppHandle.spawn(
         extra_args=[
             "--fixture-audio", str(fx_audio),
-            "--fixture-screen", "/nonexistent.png",  # empty OCR
+            "--fixture-screen", str(Path(__file__).parent / "fixtures" / "screens" / "hello.png"),
             "--mock-llm", json.dumps(MOCK_TOKENS),
         ],
         env_extra={

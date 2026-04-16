@@ -104,7 +104,7 @@ def create_app(state: ServerState) -> FastAPI:
         if state.auth_required and not secrets.compare_digest(k, state.token):
             return JSONResponse({"error": "invalid token"}, status_code=401)
         resp = RedirectResponse(url="/", status_code=302)
-        resp.set_cookie("ab_token", state.token, httponly=False, samesite="lax", max_age=86400)
+        resp.set_cookie("ab_token", state.token, httponly=True, samesite="lax", max_age=86400)  # F8: httponly
         return resp
 
     @app.get("/")
@@ -118,7 +118,7 @@ def create_app(state: ServerState) -> FastAPI:
             )
         html = UI_PATH.read_text()
         html = html.replace("__JOB_TITLE__", state.job_title)
-        html = html.replace("__TOKEN__", state.token if not state.auth_required else "")
+        html = html.replace("__TOKEN__", "")  # F4: never inject token in HTML; cookie set by /auth
         return HTMLResponse(html)
 
     @app.get("/qr")
@@ -159,13 +159,15 @@ def create_app(state: ServerState) -> FastAPI:
 
     if state.debug:
         @app.post("/debug/fire")
-        async def debug_fire():
+        async def debug_fire(ab_token: Optional[str] = Cookie(default=None)):
+            check_auth(state, ab_token)
             if state.fire_callback:
                 state.fire_callback()
             return {"ok": True, "trigger": "debug"}
 
         @app.get("/debug/state")
-        async def debug_state():
+        async def debug_state(ab_token: Optional[str] = Cookie(default=None)):
+            check_auth(state, ab_token)
             return {
                 "answer_id": state.current_answer.id,
                 "tokens_buffered": len(state.current_answer.tokens),
@@ -174,8 +176,9 @@ def create_app(state: ServerState) -> FastAPI:
             }
 
         @app.get("/debug/sensors")
-        async def debug_sensors():
+        async def debug_sensors(ab_token: Optional[str] = Cookie(default=None)):
             """Test both sensors independently. Returns diagnostic report."""
+            check_auth(state, ab_token)
             result = {"mic": {}, "screen": {}}
 
             # --- mic ---
@@ -224,8 +227,8 @@ def create_app(state: ServerState) -> FastAPI:
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):
         if state.auth_required:
-            cookie_token = ws.cookies.get("ab_token")
-            if cookie_token != state.token:
+            cookie_token = ws.cookies.get("ab_token") or ""
+            if not secrets.compare_digest(cookie_token, state.token):  # F7: constant-time
                 await ws.close(code=4401)
                 return
         await ws.accept()

@@ -149,16 +149,7 @@ class PromptBuilder:
         return "\n".join(parts)
 
     def build(self, transcript: str, ocr_text: str) -> tuple[str, str]:
-        """Return (system_prompt, user_message). System is byte-stable across calls."""
-        current_sha = hashlib.sha256(
-            self.system_prompt.encode("utf-8")
-        ).hexdigest()
-        if current_sha != self.system_sha256:
-            log.error(
-                "system prompt hash drift! expected=%s got=%s",
-                self.system_sha256[:12],
-                current_sha[:12],
-            )
+        """Return (system_prompt, user_message). System prefix is immutable after __init__."""
         transcript_section = transcript.strip() or "(no audio)"
         ocr_section = ocr_text.strip() or "(no screen content)"
         user = (

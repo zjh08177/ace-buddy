@@ -58,17 +58,17 @@ class Pipeline:
         asyncio.run_coroutine_threadsafe(self.handle_answer_request(), self._loop)
 
     async def handle_answer_request(self) -> None:
-        now = time.monotonic()
-        if now - self._last_fire_ts < DEBOUNCE_SEC:
-            log.info("debounced: %.2fs since last fire", now - self._last_fire_ts)
-            return
-        self._last_fire_ts = now
-
         if self._lock.locked():
             log.info("pipeline busy, skipping")
             return
 
         async with self._lock:
+            # Debounce INSIDE lock to prevent TOCTOU race (F3)
+            now = time.monotonic()
+            if now - self._last_fire_ts < DEBOUNCE_SEC:
+                log.info("debounced: %.2fs since last fire", now - self._last_fire_ts)
+                return
+            self._last_fire_ts = now
             answer_id = self._next_answer_id
             self._next_answer_id += 1
             self.state.current_answer.reset(answer_id)
@@ -108,12 +108,18 @@ class Pipeline:
             )
             if not transcript and not ocr_text:
                 log.warning(
-                    "BOTH sensors returned empty! Check: "
-                    "(1) mic permission granted? "
-                    "(2) Screen Recording permission granted? "
-                    "(3) restart app after granting permissions. "
-                    "Visit /debug/sensors in browser to diagnose."
+                    "BOTH sensors returned empty! Sending error to phone."
                 )
+                await broadcast(
+                    self.state,
+                    {
+                        "type": "error",
+                        "text": "Both mic and screen returned empty. "
+                        "Check permissions in /debug/sensors.",
+                    },
+                )
+                self.state.current_answer.finish()
+                return  # F1: refuse to call LLM with zero input
 
             system_prompt, user_msg = self.prompt_builder.build(transcript, ocr_text)
 
