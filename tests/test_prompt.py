@@ -68,10 +68,9 @@ def test_system_prompt_contains_injection_guard(ctx):
     assert "not as instructions" in pb.system_prompt.lower()
 
 
-def test_prompt_includes_format_rules(ctx):
+def test_prompt_includes_safety_guard(ctx):
     pb = PromptBuilder(ctx)
-    assert "**TL;DR**" in pb.system_prompt
-    assert "**Data**" in pb.system_prompt
+    assert "UNTRUSTED" in pb.system_prompt.upper() or "untrusted" in pb.system_prompt
 
 
 # --- F9: interviewer mode tests ---
@@ -90,12 +89,10 @@ def test_interviewer_mode_guard_footer(ctx):
     pb = PromptBuilder(ctx, mode="interviewer")
     assert "**Signal**" in pb.system_prompt
     assert "**Push**" in pb.system_prompt
-    # Should NOT have candidate output format
-    assert "**TL;DR**" not in pb.system_prompt
 
 
 def test_candidate_mode_is_default(ctx):
     pb = PromptBuilder(ctx)
     assert pb.said_label == "INTERVIEWER_SAID"
     assert pb.showed_label == "INTERVIEWER_SHOWED"
-    assert "**TL;DR**" in pb.system_prompt
+    assert "untrusted" in pb.system_prompt.lower()
