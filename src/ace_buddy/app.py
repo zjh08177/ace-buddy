@@ -57,6 +57,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-auth", action="store_true", help="skip token auth (tests only)")
     p.add_argument("--headless", action="store_true", help="no menu bar (tests)")
     p.add_argument("--debug", action="store_true", help="enable /debug/* routes")
+    mode_group = p.add_mutually_exclusive_group()
+    mode_group.add_argument("--interviewer", action="store_true", help="interviewer mode: mic/screen capture the candidate")
+    mode_group.add_argument("--candidate", action="store_true", help="candidate mode: mic/screen capture the interviewer (default)")
     p.add_argument("--fixture-audio", type=str, default=None)
     p.add_argument("--fixture-screen", type=str, default=None)
     p.add_argument("--mock-llm", type=str, default=None, help="JSON list of tokens to emit")
@@ -181,7 +184,9 @@ def main(argv: list[str] | None = None) -> int:
     # Load context + build pipeline components
     ctx = ContextBundle.from_dir(state.config_dir)
     state.job_title = ctx.job_title
-    prompt_builder = PromptBuilder(ctx)
+    mode = "interviewer" if args.interviewer else "candidate"
+    prompt_builder = PromptBuilder(ctx, mode=mode)
+    log.info("mode: %s", mode)
 
     audio = build_audio(args)
     screen = build_screen(args)

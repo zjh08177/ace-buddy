@@ -12,6 +12,9 @@ run:
 run-lan:
 	$(PY) -m ace_buddy.app --lan --debug
 
+run-interviewer:
+	$(PY) -m ace_buddy.app --lan --debug --interviewer
+
 run-headless:
 	$(PY) -m ace_buddy.app --headless --no-auth
 
