@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<title>ace-buddy</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0d12;
+    --panel: rgba(18, 22, 30, 0.85);
+    --accent: #6ee7b7;
+    --muted: #8b92a3;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --text: #f2f5fa;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    font-size: 18px;
+    min-height: 100dvh;
+    overscroll-behavior: none;
+  }
+  body {
+    padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom) 20px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 0;
+    font-weight: 600;
+  }
+  .status {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 14px; color: var(--muted);
+  }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted);
+    box-shadow: 0 0 6px currentColor;
+  }
+  .dot.ok { background: var(--accent); color: var(--accent); }
+  .dot.warn { background: var(--warn); color: var(--warn); }
+  .dot.err { background: var(--err); color: var(--err); }
+  .job {
+    font-size: 13px; color: var(--muted);
+  }
+  #answer {
+    background: var(--panel);
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 18px;
+    padding: 16px 18px;
+    min-height: 80dvh;
+    flex: 1;
+    overflow-y: auto;
+    line-height: 1.5;
+    font-size: 15px;
+  }
+  #answer .placeholder {
+    color: var(--muted);
+    font-style: italic;
+  }
+  #answer h2, #answer strong { color: var(--accent); }
+  #answer pre {
+    background: rgba(0,0,0,0.4);
+    border-radius: 10px;
+    padding: 12px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  #answer code { font-family: "SF Mono", "Menlo", monospace; font-size: 13px; }
+  #answer ul, #answer ol { padding-left: 18px; margin: 8px 0; }
+  #answer li { margin: 4px 0; }
+  #answer p { margin: 6px 0; }
+  button.fire {
+    background: var(--accent);
+    color: #051018;
+    border: none;
+    border-radius: 10px;
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    min-height: 36px;
+    position: fixed;
+    top: env(safe-area-inset-top, 8px);
+    left: 12px;
+    z-index: 100;
+    box-shadow: 0 2px 10px rgba(110, 231, 183, 0.3);
+  }
+  button.fire:active { transform: scale(0.96); }
+  button.fire:disabled { opacity: 0.4; }
+  details.cheat {
+    background: var(--panel);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 14px;
+    padding: 14px 18px;
+  }
+  details.cheat summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  details.cheat .qa {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+  details.cheat .qa .q { font-weight: 600; margin-bottom: 4px; }
+  details.cheat .qa .a { color: var(--muted); font-size: 15px; }
+</style>
+</head>
+<body>
+<header>
+  <div><strong>ace-buddy</strong></div>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">connecting…</span></div>
+</header>
+<div class="job" id="job">__JOB_TITLE__</div>
+
+<div id="triggerStatus" style="font-size:13px;color:var(--muted);text-align:center;min-height:18px"></div>
+
+<div id="answer"><div class="placeholder">Auto-listening for questions. Tap <b>Ask</b> to trigger manually.</div></div>
+
+<button class="fire" id="fireBtn" disabled>Ask (manual)</button>
+
+<details class="cheat">
+  <summary>Anticipated questions</summary>
+  <div id="cheatList"><div class="qa">(loading…)</div></div>
+</details>
+
+<script>
+(function(){
+  const token = "__TOKEN__";
+  if (token && !document.cookie.includes("ab_token")) {
+    document.cookie = "ab_token=" + token + ";path=/;max-age=86400;samesite=lax";
+  }
+
+  const dot = document.getElementById("dot");
+  const statusText = document.getElementById("statusText");
+  const answerEl = document.getElementById("answer");
+  const fireBtn = document.getElementById("fireBtn");
+  const cheatList = document.getElementById("cheatList");
+
+  let ws = null;
+  let firstTokenTs = null;
+  let currentAnswerId = 0;
+  let buffer = "";
+
+  // Expose for tests
+  window.firstTokenTs = null;
+  window.lastAnswerText = "";
+
+  function setStatus(state, text) {
+    dot.className = "dot " + state;
+    statusText.textContent = text;
+  }
+
+  async function requestWakeLock() {
+    if ("wakeLock" in navigator) {
+      try { await navigator.wakeLock.request("screen"); } catch (e) {}
+    }
+  }
+
+  function renderAnswerInto(el, text) {
+    if (!text) { el.innerHTML = "…"; return; }
+    let html = escapeHtml(text);
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
+      '<pre><code>' + code.trim() + '</code></pre>');
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^### (.+)$/gm, '<h3 style="color:var(--accent);font-size:14px;margin:10px 0 4px">$1</h3>');
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+    html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+    html = html.replace(/\n\n/g, '<br><br>');
+    html = html.replace(/\n/g, '<br>');
+    el.innerHTML = html;
+    window.lastAnswerText = text;
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function connect() {
+    setStatus("warn", "connecting…");
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(proto + "//" + location.host + "/ws");
+    ws.onopen = () => {
+      setStatus("ok", "ready");
+      fireBtn.disabled = false;
+      requestWakeLock();
+    };
+    ws.onclose = () => {
+      setStatus("err", "disconnected");
+      fireBtn.disabled = true;
+      setTimeout(connect, 1000);
+    };
+    ws.onerror = () => { setStatus("err", "error"); };
+    ws.onmessage = (ev) => {
+      let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.type === "hello") {
+        if (msg.job_title) document.getElementById("job").textContent = msg.job_title;
+        loadCheatsheet();
+      } else if (msg.type === "answer_start") {
+        currentAnswerId = msg.id;
+        buffer = "";
+        firstTokenTs = null;
+        setStatus("warn", "thinking…");
+        // Append a new answer block instead of clearing
+        const sep = document.createElement("div");
+        sep.style.cssText = "border-top:1px solid rgba(255,255,255,0.1);margin:16px 0;padding-top:8px;font-size:11px;color:var(--muted)";
+        const now = new Date();
+        sep.textContent = "#" + msg.id + " — " + now.toLocaleTimeString();
+        // Remove placeholder if present
+        const ph = answerEl.querySelector(".placeholder");
+        if (ph) ph.remove();
+        answerEl.appendChild(sep);
+        // Create container for this answer's streaming content
+        const block = document.createElement("div");
+        block.id = "answer-" + msg.id;
+        answerEl.appendChild(block);
+        answerEl.scrollTop = answerEl.scrollHeight;
+      } else if (msg.type === "answer_token") {
+        if (firstTokenTs === null) {
+          firstTokenTs = Date.now();
+          window.firstTokenTs = firstTokenTs;
+          setStatus("ok", "streaming");
+        }
+        buffer += msg.text;
+        const block = document.getElementById("answer-" + currentAnswerId);
+        if (block) renderAnswerInto(block, buffer);
+        answerEl.scrollTop = answerEl.scrollHeight;
+      } else if (msg.type === "answer_complete") {
+        setStatus("ok", "ready");
+        document.getElementById("triggerStatus").textContent = "";
+      } else if (msg.type === "error") {
+        setStatus("err", msg.text || "error");
+      } else if (msg.type === "trigger_reason") {
+        const reasons = {"speech_ended": "🎤 speech ended — generating...", "screen_changed": "👀 screen changed — generating..."};
+        document.getElementById("triggerStatus").textContent = reasons[msg.reason] || msg.reason;
+      }
+    };
+  }
+
+  async function loadCheatsheet() {
+    try {
+      const r = await fetch("/cheatsheet");
+      if (!r.ok) return;
+      const data = await r.json();
+      const qs = data.questions || [];
+      if (!qs.length) {
+        cheatList.innerHTML = '<div class="qa">(not computed yet)</div>';
+        return;
+      }
+      cheatList.innerHTML = qs.map(
+        q => '<div class="qa"><div class="q">' + escapeHtml(q.q || "") + '</div><div class="a">' + escapeHtml(q.a || "") + '</div></div>'
+      ).join("");
+    } catch (e) {}
+  }
+
+  fireBtn.addEventListener("click", async () => {
+    fireBtn.disabled = true;
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({type: "fire"}));
+      } else {
+        await fetch("/fire", {method: "POST"});
+      }
+    } finally {
+      setTimeout(() => { fireBtn.disabled = false; }, 1500);
+    }
+  });
+
+  connect();
+})();
+</script>
+</body>
+</html>
